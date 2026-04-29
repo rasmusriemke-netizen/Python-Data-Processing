@@ -1,13 +1,14 @@
 import csv
 from pathlib import Path
 
-import matplotlib.pyplot as plt
+import numpy as np
 from textual.app import App, ComposeResult
 from textual.containers import Container
 from textual.screen import ModalScreen
 from textual.widgets import Header, Footer, Static, Button, DataTable, Select
 from textual.binding import Binding
 from textual.widgets._directory_tree import DirectoryTree
+from textual_plotext import PlotextPlot as tpp
 
 
 def read_csv_headers(csv_path: str) -> list[str]:
@@ -296,51 +297,12 @@ def _get_csv_dialect(sample: str) -> csv.Dialect:
 
 class VariableSelectionScreen(ModalScreen[tuple[str, str] | None]):
     CSS = """
-    VariableSelectionScreen {
-        align: center middle;
-    }
-
+    VariableSelectionScreen { align: center middle; }
     #variables-dialog {
-        width: 80%;
-        height: 70%;
-        padding: 1 2;
-        border: round #89b4fa;
-        background: #313244;
+        width: 60; height: 32; padding: 1 2;
+        border: round #89b4fa; background: #313244;
     }
-
-    #variables-title {
-        height: 3;
-        content-align: center middle;
-        color: #f9e2af;
-        text-style: bold;
-    }
-
-    #variables-hint {
-        height: 1;
-        content-align: center middle;
-        color: #a6e3a1;
-        margin-bottom: 1;
-    }
-
-    #variables-selects {
-        height: 1fr;
-        layout: vertical;
-    }
-
-    Select {
-        margin-bottom: 1;
-    }
-
-    #variables-actions {
-        height: 3;
-        layout: horizontal;
-        content-align: center middle;
-    }
-
-    #variables-actions Button {
-        width: 18;
-        margin: 0 1;
-    }
+    Select { margin-bottom: 1; }
     """
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
@@ -350,40 +312,134 @@ class VariableSelectionScreen(ModalScreen[tuple[str, str] | None]):
         self.column_names = column_names
 
     def compose(self) -> ComposeResult:
-        options = [(name, name) for name in self.column_names]
+        col_options = [(name, name) for name in self.column_names]
+        plot_options = [
+            ("Scatter Plot", "scatter"),
+            ("Line Plot", "line"),
+            ("Bar Chart", "bar"),
+            ("Histogram", "histogram"),
+        ]
 
         with Container(id="variables-dialog"):
-            yield Static("Choose x and y variables", id="variables-title")
-            yield Static("Scroll or type to search through the columns", id="variables-hint")
-            with Container(id="variables-selects"):
-                yield Select(options, prompt="X variable", allow_blank=False, id="x_select")
-                yield Select(options, prompt="Y variable", allow_blank=False, id="y_select")
-            with Container(id="variables-actions"):
-                yield Button("Cancel", id="cancel_btn")
-                yield Button("Use selection", id="confirm_btn", variant="primary")
-
-    def on_mount(self) -> None:
-        x_select = self.query_one("#x_select", Select)
-        y_select = self.query_one("#y_select", Select)
-
-        if self.column_names:
-            x_select.value = self.column_names[0]
-            y_select.value = self.column_names[1] if len(self.column_names) > 1 else self.column_names[0]
+            yield Static("1. Select X Variable (Labels/X-Axis)")
+            yield Select(col_options, prompt="X variable", id="x_select")
+            
+            yield Static("2. Select Y Variable (Data/Values)")
+            yield Select(col_options, prompt="Y variable", id="y_select")
+            
+            yield Static("3. Select Plot Type")
+            yield Select(plot_options, value="scatter", id="type_select", allow_blank=False)
+            
+            yield Button("Confirm Selection", variant="primary", id="confirm_btn")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "cancel_btn":
-            self.dismiss(None)
-            return
-
         if event.button.id == "confirm_btn":
-            x_select = self.query_one("#x_select", Select)
-            y_select = self.query_one("#y_select", Select)
+            x = self.query_one("#x_select", Select).value
+            y = self.query_one("#y_select", Select).value
+            ptype = self.query_one("#type_select", Select).value
+            
+            if x and y and ptype:
+                self.dismiss((x, y, ptype))
 
-            if isinstance(x_select.value, str) and isinstance(y_select.value, str):
-                self.dismiss((x_select.value, y_select.value))
+class PlotScreen(ModalScreen[None]):
+    CSS = """
+    PlotScreen { align: center middle; }
+    #plot-container {
+        width: 95%; height: 95%;
+        border: round #89b4fa; background: #1e1e2e; padding: 1;
+    }
+    """
 
-    def action_cancel(self) -> None:
-        self.dismiss(None)
+    BINDINGS = [Binding("escape", "dismiss", "Back to Menu")]
+
+    def __init__(self, x_data, y_data, x_label, y_label, plot_type):
+        super().__init__()
+        self.x_data = x_data
+        self.y_data = y_data
+        self.x_label = x_label
+        self.y_label = y_label
+        self.plot_type = plot_type
+
+    def compose(self) -> ComposeResult:
+        with Container(id="plot-container"):
+            yield tpp()
+            yield Static(f"Mode: {self.plot_type.upper()} | Press ESC to return", id="plot-hint")
+
+    def on_mount(self) -> None:
+            plt_widget = self.query_one(tpp)
+            plt = plt_widget.plt
+            plt.clear_figure()
+            
+            # Prepare data
+            y_vals = np.array(self.y_data)
+            x_vals = np.array(self.x_data)
+
+            if self.plot_type == "scatter":
+                plt.scatter(x_vals, y_vals, label="Data Points")
+                plt.xlabel(self.x_label)
+                plt.ylabel(self.y_label)
+                
+            elif self.plot_type == "line":
+                # LOGIC: Average of Y per Age (X)
+                # 1. Get unique ages
+                unique_ages = np.unique(self.x_data)
+                # 2. Calculate average of Y for each unique age
+                avg_y = []
+                for age in unique_ages:
+                    indices = np.where(self.x_data == age)
+                    avg_y.append(np.mean(np.array(self.y_data)[indices]))
+                
+                plt.plot(unique_ages, avg_y, color="blue", marker="dot")
+                plt.xlabel(self.x_label)
+                plt.ylabel(f"Average {self.y_label}")
+                plt.title(f"Trend: Avg {self.y_label} by {self.x_label}")
+
+            elif self.plot_type == "bar":
+                # 1. Get unique categories from X (e.g., CP types 0, 1, 2, 3)
+                categories = np.unique(x_vals)
+                
+                # 2. Calculate the AVERAGE of Y for each category
+                # (e.g., Average Age for CP 0, Average Age for CP 1...)
+                avg_y_per_category = []
+                for cat in categories:
+                    # Find all Y values where X matches this category
+                    mask = (x_vals == cat)
+                    average = np.mean(y_vals[mask])
+                    avg_y_per_category.append(average)
+                
+                # 3. Plot as Bar
+                labels = [str(int(c)) for c in categories]
+                plt.bar(labels, avg_y_per_category, color="red", width=0.6)
+                
+                plt.xlabel(self.x_label)
+                plt.ylabel(f"Average {self.y_label}")
+                plt.title(f"Average {self.y_label} per {self.x_label}")
+
+            elif self.plot_type == "histogram":
+                min_val = int(np.floor(min(y_vals)))
+                max_val = int(np.ceil(max(y_vals)))
+
+                num_bins = max(1, max_val - min_val)
+
+                counts, _ = np.histogram(y_vals, bins=num_bins)
+                max_freq = int(max(counts))
+
+                plt.hist(y_vals, bins=num_bins, color="green", label=self.y_label, width=0.5)
+
+                x_step = 1 if num_bins <= 20 else (2 if num_bins <= 60 else 3)
+                x_ticks = list(range(min_val, max_val + 1, x_step))
+                plt.xticks(x_ticks)
+
+                y_step = 1 if max_freq <= 15 else (2 if max_freq <= 45 else 3)
+                plt.yticks(list(range(0, max_freq + 1, y_step)))
+
+                plt.xlabel(self.y_label)
+                plt.ylabel("Antal")
+
+
+            plt.title(f"{self.plot_type.capitalize()}: {self.y_label} vs {self.x_label}")
+            plt_widget.refresh()
+
 
 
 class TUIApp(App):
@@ -434,7 +490,7 @@ class TUIApp(App):
             yield Static("MAIN MENU", id="title")
             yield Button("Load file", id="load_file")
             yield Button("Inspect data", id="inspect")
-            yield Button("Set variables", id="set_variables")
+            yield Button("Set variables & Plot Type", id="set_variables")
             yield Button("Plot data", id="plot")
             yield Button("Exit", id="quit_btn")
             yield Static("Choose an option...", id="status")
@@ -474,72 +530,29 @@ class TUIApp(App):
         return
     
     def set_variables(self):
-        if not self.path:
-            self.query_one("#status", Static).update("Load a CSV file first.")
-            return
+        if not self.path: return
+        cols = read_csv_headers(self.path)
+        self.push_screen(VariableSelectionScreen(cols), self._on_variables_picked)
 
-        try:
-            column_names = read_csv_headers(self.path)
-        except OSError as error:
-            self.query_one("#status", Static).update(f"Could not read file: {error}")
-            return
-
-        if len(column_names) < 2:
-            self.query_one("#status", Static).update("Need at least two columns to choose x and y.")
-            return
-
-        self.push_screen(VariableSelectionScreen(column_names), self._on_variables_picked)
-
-    def _on_variables_picked(self, selection: tuple[str, str] | None) -> None:
-        if selection is None:
-            return
-
-        if not self.path:
-            self.query_one("#status", Static).update("Load a CSV file first.")
-            return
-
-        x_name, y_name = selection
-
-        try:
-            x_values, y_values = read_csv_columns(self.path, x_name, y_name)
-        except OSError as error:
-            self.query_one("#status", Static).update(f"Could not read file: {error}")
-            return
-
-        if not x_values or not y_values:
-            self.query_one("#status", Static).update("No numeric rows found for the selected variables.")
-            return
-
-        self.x_name = x_name
-        self.y_name = y_name
-        self.x_variable = x_values
-        self.y_variable = y_values
-        self.query_one("#status", Static).update(f"X: {x_name} | Y: {y_name}")
+    def _on_variables_picked(self, selection: tuple[str, str, str] | None) -> None:
+        if selection:
+            self.x_name, self.y_name, self.plot_type = selection
+            self.x_variable, self.y_variable = read_csv_columns(self.path, self.x_name, self.y_name)
+            self.query_one("#status", Static).update(f"Type: {self.plot_type} | Y: {self.y_name}")
     
     def plot(self):
-        import numpy as np
-
-        if not (self.path and self.x_name and self.y_name and self.x_variable and self.y_variable):
-            self.query_one("#status", Static).update("Load a file and choose x and y variables first.")
+        if not self.y_variable:
+            self.query_one("#status", Static).update("Select variables first!")
             return
-
-        x_values = np.asarray(self.x_variable, dtype=float)
-        y_values = np.asarray(self.y_variable, dtype=float)
-
-        m, b = np.polyfit(x_values, y_values, 1)
-        y_fit = m * x_values + b
-
-        plt.figure(figsize=(8, 5))
-        plt.scatter(x_values, y_values, marker="o")
-        plt.plot(x_values, y_fit, color="red", label=f"{self.y_name}={m:.2f}{self.x_name}+{b:.2f}")
-        plt.xlabel(self.x_name)
-        plt.ylabel(self.y_name)
-        plt.title(f"{self.y_name} vs {self.x_name}")
-        plt.grid(True, alpha=0.3)
-        plt.legend()
-        plt.tight_layout()
-        plt.show()
-
+        
+        # Push the new TUI Plot Screen instead of using Matplotlib
+        self.push_screen(PlotScreen(
+            self.x_variable, 
+            self.y_variable, 
+            self.x_name, 
+            self.y_name,
+            self.plot_type
+        ))
 
 if __name__ == "__main__":
     TUIApp().run()
