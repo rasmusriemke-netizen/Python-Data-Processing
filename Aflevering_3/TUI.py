@@ -105,88 +105,194 @@ class FilePickerScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
-class CsvHeadScreen(ModalScreen[None]):
+
+class CsvInspectorScreen(ModalScreen[None]):
+    #Csv fil inspector med konfigurerbart antal viste rækker
+    
     CSS = """
-    CsvHeadScreen {
+    CsvInspectorScreen {
         align: center middle;
     }
 
-    #preview-dialog {
-        width: 90%;
-        height: 85%;
+    #inspector-dialog {
+        width: 95%;
+        height: 90%;
         padding: 1 2;
         border: round #89b4fa;
         background: #313244;
+        layout: vertical;
     }
 
-    #preview-title {
-        height: 3;
-        content-align: center middle;
+    #inspector-header {
+        height: auto;
+        layout: horizontal;
+        margin-bottom: 1;
+    }
+
+    #inspector-title {
+        width: 1fr;
         color: #f9e2af;
         text-style: bold;
     }
 
-    #preview-hint {
-        height: 1;
-        content-align: center middle;
+    #inspector-stats {
+        width: auto;
         color: #a6e3a1;
+        text-align: right;
+    }
+
+    #inspector-controls {
+        height: auto;
+        layout: horizontal;
         margin-bottom: 1;
     }
 
-    #preview-table {
+    #row-count-select {
+        width: 15;
+    }
+
+    #row-count-control {
+        width: auto;
+        margin-right: 2;
+    }
+
+    #inspector-table {
         height: 1fr;
+        margin-bottom: 1;
+    }
+
+    #inspector-footer {
+        height: auto;
+        layout: horizontal;
+        content-align: center middle;
+    }
+
+    #inspector-footer Button {
+        width: 18;
+        margin: 0 1;
     }
     """
 
-    BINDINGS = [Binding("escape", "close", "Close")]
+    BINDINGS = [Binding("escape", "close", "Close")]        #luk vinduet med esc
 
-    def __init__(self, csv_path: str) -> None:
+    def __init__(self, csv_path: str) -> None:      #Initialiserer klassen med csv filens path og forbereder variabler
         super().__init__()
         self.csv_path = csv_path
+        self.all_rows: list[list[str]] = []
+        self.headers: list[str] = []
+        self.max_rows = 10
+        self.total_rows = 0
 
-    def compose(self) -> ComposeResult:
-        with Container(id="preview-dialog"):
-            yield Static(f"CSV head: {self.csv_path}", id="preview-title")
-            yield Static("Showing the first 5 rows", id="preview-hint")
-            yield DataTable(id="preview-table", show_row_labels=False)
+    def compose(self) -> ComposeResult:         # Definerer layoutet for knapperne og datacellerne i CSV-inspectoren
+        with Container(id="inspector-dialog"):
+            # Header med filnavn og statistik
+            with Container(id="inspector-header"):
+                yield Static(f"CSV Inspector: {Path(self.csv_path).name}", id="inspector-title")
+                yield Static("", id="inspector-stats")
 
-    def on_mount(self) -> None:
-        table = self.query_one(DataTable)
+                    
+            # Valg af antal rækker at vise
+            with Container(id="inspector-controls"):
+                yield Select(
+                    [(str(n), str(n)) for n in [5, 10, 25, 50, 100]] + [("All", "All")],
+                    value="10",
+                    id="row-count-select",
+                )
+                yield Static("rows to display", id="row-count-control")
+
+            # Data celler
+            yield DataTable(id="inspector-table", show_row_labels=True)
+
+            # Luk knap i bunden
+            with Container(id="inspector-footer"):
+                yield Button("Close", id="close_btn", variant="primary")
+
+    def on_mount(self) -> None:     #Loader dataen fra CSV-filen og opdaterer tabellen
+        self._load_csv_data()
+        self._update_table()
+
+    def on_select_changed(self, event: Select.Changed) -> None:     #Opdaterer tabellen når brugeren ændrer antallet af viste rækker
+        
+        if event.control.id == "row-count-select":
+            if event.value == "All":
+                self.max_rows = self.total_rows
+                self._update_table()
+            else:
+                try:
+                    self.max_rows = int(event.value)
+                    self._update_table()
+                except (ValueError, TypeError):
+                    pass
+
+    def _load_csv_data(self) -> None:
+        #Indlæser CSV-dataen og håndterer eventuelle fejl ved filadgang
         path = Path(self.csv_path)
-
+        
         try:
             with path.open("r", encoding="utf-8-sig", newline="") as csv_file:
                 sample = csv_file.read(4096)
                 csv_file.seek(0)
-
-                try:
-                    dialect = csv.Sniffer().sniff(sample)
-                except csv.Error:
-                    dialect = csv.excel
-
-                reader = csv.reader(csv_file, dialect)
-                headers = next(reader, None)
-
-                if not headers:
-                    table.add_column("Message")
-                    table.add_row("CSV file is empty")
-                    return
-
-                table.add_columns(*headers)
-
-                for row in reader:
-                    padded_row = list(row[: len(headers)])
-                    padded_row.extend([""] * (len(headers) - len(padded_row)))
-                    table.add_row(*padded_row)
-                    if table.row_count >= 5:
-                        break
+                
+                dialect = _get_csv_dialect(sample)
+                reader = csv.reader(csv_file, dialect=dialect)
+                
+                self.headers = next(reader, None) or []
+                self.all_rows = list(reader)
+                self.total_rows = len(self.all_rows)
         except OSError as error:
-            table.add_column("Message")
-            table.add_row(f"Could not read file: {error}")
+            self.headers = ["Error"]
+            self.all_rows = [[str(error)]]
+            self.total_rows = 1
 
-    def action_close(self) -> None:
+    def _update_table(self) -> None:        #Opdaterer tabellen med de indlæste data
+        
+        table = self.query_one("#inspector-table", DataTable)
+        table.clear(columns=True)
+        
+        if not self.headers:
+            table.add_column("Message")
+            table.add_row("CSV file is empty")
+            self._update_stats()
+            return
+        
+        # Tilføj kolonner baseret på headersne
+        table.add_columns(*self.headers)
+        
+                
+        # Tilføj rækker op til max_rows eller total_rows, alt efter hvad der er mindre
+        rows_to_show = min(self.max_rows, self.total_rows)
+        for i, row in enumerate(self.all_rows[:rows_to_show], start=1):
+            padded_row = list(row[:len(self.headers)])
+            padded_row.extend([""] * (len(self.headers) - len(padded_row)))
+            
+            # Pass label=str(i) to show the row number
+            table.add_row(*padded_row, label=str(i))
+            
+        self._update_stats()
+
+    def _update_stats(self) -> None:
+        #Opdaterer statistik-teksten
+        stats_widget = self.query_one("#inspector-stats", Static)
+        rows_shown = min(self.max_rows, self.total_rows)
+        stats_text = f"Showing {rows_shown} of {self.total_rows} rows | {len(self.headers)} columns"
+        stats_widget.update(stats_text)
+
+    
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:     #Lukker vinduet når "Close" knappen trykkes
+        if event.button.id == "close_btn":
+            self.dismiss()
+
+    def action_close(self) -> None:     #Lukker vinduet når brugeren trykker på escape
         self.dismiss()
 
+
+def _get_csv_dialect(sample: str) -> csv.Dialect:   
+    #Forsøger at gætte CSV-dialekten baseret på et prøveudsnit af filen, og falder tilbage til standarddialekten hvis det fejler
+    try:
+        return csv.Sniffer().sniff(sample)
+    except csv.Error:
+        return csv.excel
 
 class VariableSelectionScreen(ModalScreen[tuple[str, str] | None]):
     CSS = """
@@ -364,7 +470,7 @@ class TUIApp(App):
             self.query_one("#status", Static).update("Load a CSV file first.")
             return
 
-        self.push_screen(CsvHeadScreen(self.path))
+        self.push_screen(CsvInspectorScreen(self.path))
         return
     
     def set_variables(self):
