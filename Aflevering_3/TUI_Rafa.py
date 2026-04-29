@@ -274,22 +274,61 @@ class PlotScreen(ModalScreen[None]):
                 plt.ylabel(self.y_label)
                 
             elif self.plot_type == "line":
-                plt.plot(x_vals, y_vals, label="Trend")
+                # LOGIC: Average of Y per Age (X)
+                # 1. Get unique ages
+                unique_ages = np.unique(self.x_data)
+                # 2. Calculate average of Y for each unique age
+                avg_y = []
+                for age in unique_ages:
+                    indices = np.where(self.x_data == age)
+                    avg_y.append(np.mean(np.array(self.y_data)[indices]))
+                
+                plt.plot(unique_ages, avg_y, color="blue", marker="dot")
                 plt.xlabel(self.x_label)
-                plt.ylabel(self.y_label)
+                plt.ylabel(f"Average {self.y_label}")
+                plt.title(f"Trend: Avg {self.y_label} by {self.x_label}")
 
             elif self.plot_type == "bar":
-                # Bar chart expects labels for X and values for Y
-                # We convert x_vals to strings if they aren't already
-                labels = [str(val) for val in self.x_data]
-                plt.bar(labels, y_vals, label=self.y_label)
+                # 1. Get unique categories from X (e.g., CP types 0, 1, 2, 3)
+                categories = np.unique(x_vals)
+                
+                # 2. Calculate the AVERAGE of Y for each category
+                # (e.g., Average Age for CP 0, Average Age for CP 1...)
+                avg_y_per_category = []
+                for cat in categories:
+                    # Find all Y values where X matches this category
+                    mask = (x_vals == cat)
+                    average = np.mean(y_vals[mask])
+                    avg_y_per_category.append(average)
+                
+                # 3. Plot as Bar
+                labels = [str(int(c)) for c in categories]
+                plt.bar(labels, avg_y_per_category, color="red", width=0.6)
+                
                 plt.xlabel(self.x_label)
-                plt.ylabel(self.y_label)
+                plt.ylabel(f"Average {self.y_label}")
+                plt.title(f"Average {self.y_label} per {self.x_label}")
 
             elif self.plot_type == "histogram":
-                plt.hist(y_vals, bins=15, color="green", label=self.y_label)
+                min_val = int(np.floor(min(y_vals)))
+                max_val = int(np.ceil(max(y_vals)))
+
+                num_bins = max(1, max_val - min_val)
+
+                counts, _ = np.histogram(y_vals, bins=num_bins)
+                max_freq = int(max(counts))
+
+                plt.hist(y_vals, bins=num_bins, color="green", label=self.y_label, width=0.5)
+
+                x_step = 1 if num_bins <= 20 else (2 if num_bins <= 60 else 3)
+                x_ticks = list(range(min_val, max_val + 1, x_step))
+                plt.xticks(x_ticks)
+
+                y_step = 1 if max_freq <= 15 else (2 if max_freq <= 45 else 3)
+                plt.yticks(list(range(0, max_freq + 1, y_step)))
+
                 plt.xlabel(self.y_label)
-                plt.ylabel("Frequency")
+                plt.ylabel("Antal")
 
 
             plt.title(f"{self.plot_type.capitalize()}: {self.y_label} vs {self.x_label}")
